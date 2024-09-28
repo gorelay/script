@@ -6,13 +6,17 @@ error() { echo -e "\033[31m\033[01m$*\033[0m" && exit 1; } # 红色
 info() { echo -e "\033[32m\033[01m$*\033[0m"; }            # 绿色
 hint() { echo -e "\033[33m\033[01m$*\033[0m"; }            # 黄色
 
-DOWNLOAD_HOST="https://api.gorelay.net"
-PRODUCT="$1"
+if [ -z "$DOWNLOAD_HOST" ]; then
+    DOWNLOAD_HOST="https://api.gorelay.net"
+fi
+
+PRODUCT_EXE="$1"
 PRODUCT_ARGUMENTS="$2"
 
-if [ -z "$PRODUCT" ]; then
-    error "输入有误"
-fi
+case $PRODUCT_EXE in
+rel_nodeclient) true ;;
+*) error "输入有误" ;;
+esac
 
 if [ -z "$PRODUCT_ARGUMENTS" ]; then
     error "输入有误"
@@ -37,7 +41,7 @@ if grep "Intel Core Processor (Broadwell)" /proc/cpuinfo >/dev/null 2>&1; then
     ARCH=amd64
 fi
 
-PRODUCT="$PRODUCT"_linux_"$ARCH"
+PRODUCT="$PRODUCT_EXE"_linux_"$ARCH"
 
 #### 重复安装
 
@@ -51,66 +55,79 @@ echo_uninstall_to_file() {
 
 #### 询问用户
 
-if [ -z "$BG_UPDATE" ]; then
-    read -p "请输入服务名 [默认 gorelay] : " service_name
-    service_name=$(echo "$service_name" | awk '{print$1}')
-    if [ -z "$service_name" ]; then
-        service_name="gorelay"
-    fi
-    #
-    if [ -f "/etc/systemd/system/${service_name}.service" ]; then
-        hint "该服务已经存在，请先运行以下命令卸载："
-        echo_uninstall "$service_name"
-        exit
-    fi
-    ##
-    read -p "是否优化系统参数 [输入 n 不优化，默认优化] : " youhua
-    youhua=$(echo "$youhua" | awk '{print$1}' | tr A-Z a-z)
-    if [ "$youhua" != "n" ]; then
-        OPTIMIZE=1
-    fi
-    ##
-    read -p "是否安装常用工具 [输入 n 不安装，默认安装] : " azcygj
-    azcygj=$(echo "$azcygj" | awk '{print$1}' | tr A-Z a-z)
-    if [ "$azcygj" != "n" ]; then
-        INSTALL_TOOLS=1
+if [ -z "$S" ]; then
+    if [ -z "$BG_UPDATE" ]; then
+        read -p "请输入服务名 [默认 gorelay] : " service_name
+        service_name=$(echo "$service_name" | awk '{print$1}')
+        if [ -z "$service_name" ]; then
+            service_name="gorelay"
+        fi
+        #
+        if [ -f "/etc/systemd/system/${service_name}.service" ]; then
+            hint "该服务已经存在，请先运行以下命令卸载："
+            echo_uninstall "$service_name"
+            exit
+        fi
+        ##
+        read -p "是否优化系统参数 [输入 任意内容 不优化，默认优化] : " youhua
+        youhua=$(echo "$youhua" | awk '{print$1}')
+        if [ -z "$youhua" ]; then
+            OPTIMIZE=1
+        fi
+        ##
+        read -p "是否安装常用工具 [输入 任意内容 不安装，默认安装] : " azcygj
+        azcygj=$(echo "$azcygj" | awk '{print$1}')
+        if [ -z "$azcygj" ]; then
+            INSTALL_TOOLS=1
+        fi
+    else
+        service_name=$(basename "$PWD")
     fi
 else
-    service_name=$(basename "$PWD")
+    # 静默安装
+    service_name="$S"
 fi
 
 #### ？
 
 if [ -z "$BG_UPDATE" ]; then
+    #### 检查重复对接
+    nyaUUID=$(echo "$PRODUCT_ARGUMENTS" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}' || true)
+    if [ -n "$nyaUUID" ]; then
+        nyaFiles=$(grep -R --include "start.sh" -- "$nyaUUID" /opt || true)
+        if [ -n "$nyaFiles" ]; then
+            warning "检测到重复对接，会影响正常运行。参考信息如下："
+            echo "$nyaFiles"
+            error "请卸载上述服务，再进行对接。"
+        fi
+    fi
+    ####
     mkdir -p /etc/systemd/system
     mkdir -p ~/.config
     mkdir -p /opt/"${service_name}"
     cd /opt/"${service_name}"
     #### 安装一些常用工具
-    if [ -z "$NYP_DOCKER" ]; then
-        if [ -n "$INSTALL_TOOLS" ]; then
-            apt-get update
-            apt-get install -y wget curl mtr-tiny iftop unzip htop net-tools dnsutils nload psmisc nano
-        fi
+    if [ -n "$INSTALL_TOOLS" ]; then
+        apt-get update
+        apt-get install -y wget curl mtr-tiny iftop unzip htop net-tools dnsutils nload psmisc nano screen
     fi
 fi
 
-#### Download & unzip product (rel_nodeclient)
+#### Download & unzip
 
 rm -rf temp_backup
 mkdir -p temp_backup
 
 if [ -z "$NO_DOWNLOAD" ]; then
-    mv rel_nodeclient temp_backup/ || true
-    mv realnya temp_backup/ || true
-    curl -fLSsO "$DOWNLOAD_HOST"/download/download.sh
-    bash download.sh "$DOWNLOAD_HOST" "$PRODUCT"
+    mv "$PRODUCT_EXE" temp_backup/ || true
+    curl -fLSsO "$DOWNLOAD_HOST"/download/download.sh || true
+    bash download.sh "$DOWNLOAD_HOST" "$PRODUCT" || true
 fi
 
-if [ -f "rel_nodeclient" ]; then
+if [ -f "$PRODUCT_EXE" ]; then
     rm -rf temp_backup
 else
-    mv temp_backup/* .
+    mv temp_backup/* . || true
     error "下载失败！"
 fi
 
@@ -119,11 +136,11 @@ fi
 if [ -z "$BG_UPDATE" ]; then
     rm -f start.sh
     echo 'source ./env.sh || true' >>start.sh
-    echo './rel_nodeclient' "$PRODUCT_ARGUMENTS" >>start.sh
+    echo './'"$PRODUCT_EXE" "$PRODUCT_ARGUMENTS" >>start.sh
 fi
 
 echo "[Unit]
-Description=gorelay
+Description=GoRelay
 After=network-online.target
 Wants=network-online.target systemd-networkd-wait-online.service
 [Service]
